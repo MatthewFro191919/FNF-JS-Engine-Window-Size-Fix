@@ -1,85 +1,64 @@
-name: Mobile + Release
+name: Mobile Release
+
 on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 permissions:
   contents: write
-  discussions: write
-
-env:
-  PROJECT_NAME: JSEngine
 
 jobs:
-  get-commit-hash:
+  get-latest-tag:
     runs-on: ubuntu-latest
     outputs:
-      commit_hash: ${{ steps.get_commit_hash.outputs.COMMIT_HASH }}
+      latest_tag: ${{ steps.get_tag.outputs.LATEST_TAG }}
     steps:
-      - name: Get latest commit hash
-        id: get_commit_hash
+      - name: Get latest release tag
+        id: get_tag
         run: |
-          commit_hash=${GITHUB_SHA::7}
-          echo "Latest commit hash is $commit_hash"
-          echo "::set-output name=COMMIT_HASH::$commit_hash"
+          latest_tag=$(curl --silent "https://api.github.com/repos/${{ github.repository }}/releases/latest" | jq -r .tag_name)
+          echo "Latest tag is $latest_tag"
+          echo "::set-output name=LATEST_TAG::$latest_tag"
+
   build:
-    name: ${{ matrix.name }}
-    needs: get-commit-hash
-    strategy:
-      matrix:
-        include:
-          - name: Android
-            os: macos-15
-            buildArgs: "android -final -D officialBuild"
-            setupCommand: sh ./setup/unix.sh
-            artifactName: androidBuild
-            artifactPath: "export/release/android/bin/app/build/outputs/apk/release/*.apk"
-          - name: iOS
-            os: macos-15
-            setupCommand: sh ./setup/unix.sh
-            buildArgs: "ios -final -nosign -D officialBuild"
-            artifactName: iOSBuild
-            artifactPath: "export/release/ios/build/Release-iphoneos/*.ipa"
-    uses: ./.github/workflows/build.yml
+    name: Build
+    uses: ./.github/workflows/mobile.yml
     with:
-        name: ${{ matrix.name }}
-        os: ${{ matrix.os }}
-        setupCommand: ${{ matrix.setupCommand }}
-        buildArgs: ${{ matrix.buildArgs }}
-        artifactName: ${{ matrix.artifactName }}
-        artifactPath: ${{ matrix.artifactPath }}
+      buildFlags: officialBuild
 
-  Releaser:
-    needs: [get-commit-hash, build]
+  release-android:
+    name: Release androidBuild
+    needs: [get-latest-tag, build]
     runs-on: ubuntu-latest
-    permissions: write-all
     steps:
-      - name: Download Android Build
+      - name: Download Android artifact
         uses: actions/download-artifact@main
         with:
-           name: androidBuild
-           path: /home/runner
+          name: androidBuild
+      - name: Upload androidBuild to release
+        uses: svenstaro/upload-release-action@2.5.0
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ needs.get-latest-tag.outputs.latest_tag }}
+          file: JSEngine-release.apk
+          asset_name: FNF-JS-Engine-android.apk
+          overwrite: false
 
-      - name: Move Android File
-        run: mv /home/runner/${{ env.PROJECT_NAME }}-release.apk /home/runner/${{ env.PROJECT_NAME }}-Android.apk
-
-      - name: Download iOS Build
+  release-ios:
+    name: Release iOSBuild
+    needs: [get-latest-tag, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download iOS artifact
         uses: actions/download-artifact@main
         with:
-           name: iOSBuild
-           path: ${{ github.workspace }}
-
-      - name: Zip iOS Build For Release
-        run: zip -r /home/runner/${{ env.PROJECT_NAME }}-iOS.zip ${{ github.workspace }}/${{ env.PROJECT_NAME }}.ipa
-
-      - name: Publish The Release
-        uses: softprops/action-gh-release@v2
+          name: iOSBuild
+      - name: Zip For Release
+        run: zip -r JSEngine-iOS.zip JSEngine.ipa
+      - name: Upload iOSBuild to release
+        uses: svenstaro/upload-release-action@2.5.0
         with:
-          name: "DevBuild ${{ needs.get-commit-hash.outputs.commit_hash }}"
-          tag_name: "devbuild-${{ needs.get-commit-hash.outputs.commit_hash }}"
-          prerelease: true
-          files: |
-            /home/runner/*.apk
-            /home/runner/*.zip
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ needs.get-latest-tag.outputs.latest_tag }}
+          file: JSEngine-iOS.zip
+          asset_name: FNF-JS-Engine-iOS.zip
+          overwrite: false
