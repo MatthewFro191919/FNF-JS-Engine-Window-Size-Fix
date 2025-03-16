@@ -46,7 +46,7 @@ jobs:
   release-ios:
     name: Release iOSBuild
     needs: [get-latest-tag, build]
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - name: Download iOS artifact
         uses: actions/download-artifact@main
