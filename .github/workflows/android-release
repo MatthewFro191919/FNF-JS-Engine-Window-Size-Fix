@@ -51,14 +51,14 @@ jobs:
     runs-on: ubuntu-latest
     permissions: write-all
     steps:
-      - name: Download iOS Build
+      - name: Download Android Build
         uses: actions/download-artifact@main
         with:
-           name: iOSBuild
-           path: ${{ github.workspace }}
+           name: androidBuild
+           path: /home/runner
 
-      - name: Zip iOS Build For Release
-        run: zip -r /home/runner/${{ env.PROJECT_NAME }}-iOS.zip ${{ github.workspace }}/${{ env.PROJECT_NAME }}.ipa
+      - name: Move Android File
+        run: mv /home/runner/${{ env.PROJECT_NAME }}-release.apk /home/runner/${{ env.PROJECT_NAME }}-Android.apk
 
       - name: Publish The Release
         uses: softprops/action-gh-release@v2
