@@ -1,83 +1,92 @@
-name: Mobile
-on:
- push:
-    branches: main
- workflow_dispatch:
+name: Mobile + Release
+on: workflow_dispatch
 
- workflow_call:
-    inputs:
-      buildFlags:
-        required: false
-        type: string
+permissions:
+  contents: write
+  discussions: write
+
+env:
+  PROJECT_NAME: PsychEngine
+  REPO_PATH: MobilePorting/FNF-PsychEngine-Mobile
 
 jobs:
-  Mobile:
-    runs-on: ${{matrix.os}}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
+  get-commit-hash:
+    runs-on: ubuntu-latest
+    outputs:
+      commit_hash: ${{ steps.get_commit_hash.outputs.COMMIT_HASH }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@main
+      - name: Check Repository
+        run: |
+          echo "GITHUB_REPOSITORY: $GITHUB_REPOSITORY"
+          echo "REPO_PATH: ${{ env.REPO_PATH }}"
+          if [[ "$GITHUB_REPOSITORY" != "${{ env.REPO_PATH }}" ]]; then
+            echo "Doesn't seem to be correct, returning SIGABRT..."
+            exit 6
+          else
+            echo "Seems to be correct..."
+          fi
+      - name: Get latest commit hash
+        id: get_commit_hash
+        run: |
+          commit_hash=${GITHUB_SHA::7}
+          echo "Latest commit hash is $commit_hash"
+          echo "::set-output name=COMMIT_HASH::$commit_hash"
+  build:
+    name: ${{ matrix.name }}
+    needs: get-commit-hash
+    strategy:
+      matrix:
+        include:
+          - name: Android
+            os: macos-15
+            buildArgs: "android -final -D officialBuild"
+            setupCommand: sh ./setup/unix.sh
+            artifactName: androidBuild
+            artifactPath: "export/release/android/bin/app/build/outputs/apk/release/*.apk"
+          - name: iOS
+            os: macos-15
+            setupCommand: sh ./setup/unix.sh
+            buildArgs: "ios -final -nosign -D officialBuild"
+            artifactName: iOSBuild
+            artifactPath: "export/release/ios/build/Release-iphoneos/*.ipa"
+    uses: ./.github/workflows/build.yml
+    with:
+        name: ${{ matrix.name }}
+        os: ${{ matrix.os }}
+        setupCommand: ${{ matrix.setupCommand }}
+        buildArgs: ${{ matrix.buildArgs }}
+        artifactName: ${{ matrix.artifactName }}
+        artifactPath: ${{ matrix.artifactPath }}
 
-      - name: Setup Haxe
-        uses: krdlab/setup-haxe@master
+  Releaser:
+    needs: [get-commit-hash, build]
+    runs-on: ubuntu-latest
+    permissions: write-all
+    steps:
+      - name: Download Android Build
+        uses: actions/download-artifact@main
         with:
-          haxe-version: 4.3.6
+           name: androidBuild
+           path: /home/runner
 
-      - name: Setup Android NDK
-        if: startsWith(matrix.os, 'ubuntu')
-        shell: bash
-        run: |
-          cd ${{ runner.temp }}
-          echo "Downloading Android NDK r28..."
-          curl -sSfL -o android-ndk.tar.xz "https://github.com/MobilePorting/android-ndk-cosmo/releases/download/r28/android-ndk-r28-unix.tar.xz"
-          echo "Extracting Android NDK r28..."
-          tar -xf android-ndk.tar.xz
-          echo "NDK r28 successfully downloaded and extracted!"
+      - name: Move Android File
+        run: mv /home/runner/${{ env.PROJECT_NAME }}-release.apk /home/runner/${{ env.PROJECT_NAME }}-Android.apk
 
-      - name: Install Libraries
-        run: |
-          haxelib install hmm --quiet
-          haxelib run hmm install --quiet
-
-      - name: Configure Android
-        if: startsWith(matrix.os, 'ubuntu')
-        run: |
-          haxelib run lime config ANDROID_SDK $ANDROID_HOME
-          haxelib run lime config ANDROID_NDK_ROOT ${{ runner.temp }}/android-ndk-r28
-          haxelib run lime config JAVA_HOME $JAVA_HOME_17_X64
-          haxelib run lime config ANDROID_SETUP true
-
-      - name: Compile (Android)
-        if: startsWith(matrix.os, 'ubuntu')
-        run: haxelib run lime build android -D ${{ inputs.buildFlags }}
-
-      - name: Compile (iOS)
-        if: startsWith(matrix.os, 'macos')
-        run: haxelib run lime build ios -nosign -D ${{ inputs.buildFlags }}
-
-      - name: Make Ipa
-        if: startsWith(matrix.os, 'macos')
-        run: |
-          cd export/release/ios/build/*-iphoneos
-          mkdir Payload
-          mv *.app Payload
-          zip -r JSEngine.ipa Payload
-
-      - name: Upload Artifact (Android)
-        if: startsWith(matrix.os, 'ubuntu')
-        uses: actions/upload-artifact@main
+      - name: Download iOS Build
+        uses: actions/download-artifact@main
         with:
-          name: androidBuild
-          path: export/release/android/bin/app/build/outputs/apk/release/*.apk
-          if-no-files-found: error
+           name: iOSBuild
+           path: ${{ github.workspace }}
 
-      - name: Upload Artifact (iOS)
-        if: startsWith(matrix.os, 'macos')
-        uses: actions/upload-artifact@main
+      - name: Zip iOS Build For Release
+        run: zip -r /home/runner/${{ env.PROJECT_NAME }}-iOS.zip ${{ github.workspace }}/${{ env.PROJECT_NAME }}.ipa
+
+      - name: Publish The Release
+        uses: softprops/action-gh-release@v2
         with:
-          name: iOSBuild
-          path: export/release/ios/build/Release-iphoneos/*.ipa
-          if-no-files-found: error
+          name: "DevBuild ${{ needs.get-commit-hash.outputs.commit_hash }}"
+          tag_name: "devbuild-${{ needs.get-commit-hash.outputs.commit_hash }}"
+          prerelease: true
+          files: |
+            /home/runner/*.apk
+            /home/runner/*.zip
